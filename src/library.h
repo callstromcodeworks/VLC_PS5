@@ -81,6 +81,8 @@ bool library_playlist_ours(const std::string &path);
 std::string library_playlist_create(const std::string &name);
 /* Adds a file at the end; false when it was already in or can't be written. */
 bool library_playlist_add(const std::string &playlist, const std::string &file);
+/* The same for several (a folder's files): how many went in. */
+int library_playlist_add_files(const std::string &playlist, const std::vector<std::string> &files);
 bool library_playlist_remove(const std::string &playlist, const std::string &file);
 /* Moves a file one place up (-1) or down (+1). */
 bool library_playlist_move(const std::string &playlist, const std::string &file, int step);

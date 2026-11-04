@@ -2216,6 +2216,7 @@ std::string pl_open;          /* the playlist being looked at, "" for the list *
 std::vector<int> pl_items;    /* its files that are in the library */
 double pl_items_at = -100;    /* read again now and then (drives come and go) */
 std::string pl_add_file;      /* PL_PICK / PL_NAME: the file to put in */
+std::string pl_add_folder;    /* PL_PICK / PL_NAME: or a folder, its files all go in */
 std::string pl_rename;        /* PL_NAME: the playlist renamed, "" for a new one */
 void icon_plus_circle(float cx, float cy, float s, ImU32 col);
 void open_playlist_name(const std::string &rename);
@@ -2448,6 +2449,7 @@ void tab_playlists()
         if (hit(PAD_CROSS)) {
             if (pl_focus == 0) {
                 pl_add_file.clear();
+                pl_add_folder.clear();
                 open_playlist_name("");
             } else if (library_playlist_has_links(pls[pl_focus - 1].path)) {
                 open_channel_list(pls[pl_focus - 1].path);
@@ -4015,9 +4017,10 @@ void modal_add_share()
 /* "Add to playlist": "New playlist" first, then the ones made in VLC. */
 std::string trimmed(std::string s);
 
-void open_playlist_pick(const std::string &file)
+void open_playlist_pick(const std::string &file, const std::string &folder = "")
 {
     pl_add_file = file;
+    pl_add_folder = folder;
     modal = PL_PICK;
     modal_focus = 0;
     modal_anim = 0;
@@ -4033,11 +4036,34 @@ void open_playlist_name(const std::string &rename)
     modal_anim = 0;
 }
 
+/* What "Add to playlist" takes from a folder: its videos and songs,
+ * subfolders' too, in path order. any: stop at the first (is there one?). */
+std::vector<std::string> playlist_folder_files(const std::string &dir, bool any = false)
+{
+    std::vector<std::string> files;
+    std::string prefix = dir + "/";
+    for (const MediaItem &m : L())
+        if (m.path.compare(0, prefix.size(), prefix) == 0 && !m.other && !m.text && !m.archive && !m.image &&
+            !is_link(m.path)) {
+            files.push_back(m.path);
+            if (any)
+                return files;
+        }
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
 void add_to_playlist(const std::string &playlist)
 {
     const PlaylistFile *pl = playlist_by_path(playlist);
     std::string name = pl ? pl->name : "";
-    if (library_playlist_add(playlist, pl_add_file))
+    if (!pl_add_folder.empty()) {
+        int added = library_playlist_add_files(playlist, playlist_folder_files(pl_add_folder));
+        if (added > 0)
+            toast(trf("Added %d files to %s", added, name.c_str()), 2);
+        else
+            toast(trf("Already in %s", name.c_str()), 2);
+    } else if (library_playlist_add(playlist, pl_add_file))
         toast(trf("Added to %s", name.c_str()), 2);
     else
         toast(trf("Already in %s", name.c_str()), 2);
@@ -4063,6 +4089,7 @@ void modal_pl_pick()
         return;
     }
     MediaItem *m = library_find(pl_add_file);
+    std::string folder_name = pl_add_folder.substr(pl_add_folder.rfind('/') + 1);
     float a = ease(modal_anim);
     dim_screen(a);
     const float w = 640, row = 76;
@@ -4071,7 +4098,9 @@ void modal_pl_pick()
     float x = 960 - w / 2, y = 540 - h / 2 + (1 - a) * 40;
     panel(x, y, w, h, a);
     text(f_bold, 30, x + 40, y + 30, alpha(C_TEXT, a), "Add to playlist");
-    if (m)
+    if (!pl_add_folder.empty())
+        text(f_reg, 21, x + 40, y + 74, alpha(C_DIM, a), folder_name.c_str(), 0, w - 80);
+    else if (m)
         text(f_reg, 21, x + 40, y + 74, alpha(C_DIM, a), m->name.c_str(), 0, w - 80);
     int first = std::max(0, std::min(modal_focus - shown / 2, n - shown));
     for (int k = 0; k < shown; k++) {
@@ -4115,7 +4144,10 @@ void modal_pl_name()
     text(f_bold, 36, x, classic_look ? 32 : 64, alpha(C_TEXT, a), pl_rename.empty() ? "New playlist" : "Rename playlist");
     text_box(x, 128, w, "Name the playlist", a, true);
     MediaItem *m = pl_add_file.empty() ? nullptr : library_find(pl_add_file);
-    if (m)
+    if (!pl_add_folder.empty())
+        text(f_reg, 22, x, 248, alpha(C_DIM, a),
+             trf("The files of %s go in", pl_add_folder.substr(pl_add_folder.rfind('/') + 1).c_str()).c_str(), 0, w);
+    else if (m)
         text(f_reg, 22, x, 248, alpha(C_DIM, a), trf("%s goes in first", m->name.c_str()).c_str(), 0, w);
     else
         text(f_reg, 22, x, 248, alpha(C_DIM, a), "Saved in the media folder's Playlists, as a file VLC on a computer opens too", 0, w);
@@ -4130,7 +4162,7 @@ void modal_pl_name()
                 toast("A playlist with this name is already there, or the disk can't be written", 3);
             } else {
                 modal = NONE;
-                if (!pl_add_file.empty()) {
+                if (!pl_add_file.empty() || !pl_add_folder.empty()) {
                     add_to_playlist(path);
                 } else {
                     toast(trf("Made %s", t.c_str()), 2);
@@ -5092,9 +5124,18 @@ void modal_options()
         if (!library_playlist_ours(pl_target))
             pl_target.clear();
     }
+    /* Browse: a folder on the console, its files into a playlist */
+    std::string folder_target;
+    if (!in_player && tab == BROWSE && browse_focus < (int)browse_entries.size()) {
+        const BrowseEntry &e = browse_entries[browse_focus];
+        if (e.dir && e.net == NET_NONE && !e.playlist && !playlist_folder_files(e.path, true).empty())
+            folder_target = e.path;
+    }
     if (target >= 0 && !L()[target].other && !L()[target].text && !L()[target].archive && !L()[target].image &&
         !is_link(L()[target].path))
         items.insert(items.begin() + 1, { "Add to playlist", OI_ADD_PL });
+    else if (!folder_target.empty())
+        items.insert(items.begin() + 1, { "Add folder to playlist", OI_ADD_PL });
     if (!pl_target.empty()) {
         items.insert(items.begin(), { "Delete playlist", OI_DELETE_PL });
         items.insert(items.begin(), { "Rename playlist", OI_RENAME_PL });
@@ -5213,10 +5254,14 @@ void modal_options()
         leave_player(false);
         break;
     case OI_ADD_PL:
-        open_playlist_pick(L()[target].path);
+        if (!folder_target.empty())
+            open_playlist_pick("", folder_target);
+        else
+            open_playlist_pick(L()[target].path);
         break;
     case OI_RENAME_PL:
         pl_add_file.clear();
+        pl_add_folder.clear();
         open_playlist_name(pl_target);
         break;
     case OI_DELETE_PL:

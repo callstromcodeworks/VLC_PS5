@@ -1618,6 +1618,20 @@ bool library_playlist_add(const std::string &playlist, const std::string &file)
     return playlist_write(playlist, files);
 }
 
+int library_playlist_add_files(const std::string &playlist, const std::vector<std::string> &add)
+{
+    std::vector<std::string> files = playlist_read(playlist);
+    int added = 0;
+    for (const std::string &file : add)
+        if (std::find(files.begin(), files.end(), file) == files.end()) {
+            files.push_back(file);
+            added++;
+        }
+    if (added == 0 || !playlist_write(playlist, files))
+        return 0;
+    return added;
+}
+
 bool library_playlist_remove(const std::string &playlist, const std::string &file)
 {
     std::vector<std::string> files = playlist_read(playlist);
